@@ -1,0 +1,109 @@
+name: Tether CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ----------------------------------------------------------------------------
+  # 1. Python Unit, Integration & Chaos Test Suite
+  # ----------------------------------------------------------------------------
+  python-tests:
+    name: Python Test Suite & Verification
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install uv Package Manager
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Dependencies
+        run: uv sync --all-extras
+
+      - name: Run Pytest Test Suite
+        env:
+          DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/postgres"
+          ENVIRONMENT: "test"
+        run: |
+          uv run pytest tests/ -v --durations=10
+
+  # ----------------------------------------------------------------------------
+  # 2. Terraform Infrastructure Quality & Validation
+  # ----------------------------------------------------------------------------
+  terraform-check:
+    name: Terraform Format & Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.8.0"
+
+      - name: Terraform Format Check
+        run: terraform -chdir=infra fmt -check
+
+      - name: Terraform Init (No Backend)
+        run: terraform -chdir=infra init -backend=false
+
+      - name: Terraform Validate
+        run: terraform -chdir=infra validate
+
+  # ----------------------------------------------------------------------------
+  # 3. Docker Container Build Verification
+  # ----------------------------------------------------------------------------
+  docker-build:
+    name: Cloud Run Docker Build Verification
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Container Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          tags: tether-runtime:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ----------------------------------------------------------------------------
+  # 4. Next.js Review UI Build & Lint
+  # ----------------------------------------------------------------------------
+  review-ui:
+    name: Review UI Build & TypeScript Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+          cache-dependency-path: "review-ui/package.json"
+
+      - name: Install Frontend Dependencies
+        working-directory: ./review-ui
+        run: npm install
+
+      - name: Build Next.js Production Bundle
+        working-directory: ./review-ui
+        run: npm run build
