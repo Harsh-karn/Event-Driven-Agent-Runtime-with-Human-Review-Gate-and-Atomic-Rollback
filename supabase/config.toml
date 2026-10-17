@@ -1,0 +1,13 @@
+# Supabase project configuration for Tether
+project_id = "tether-runtime"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "pgmq"]
+
+[db]
+port = 54322
+
+[functions.ingest]
+verify_jwt = false
