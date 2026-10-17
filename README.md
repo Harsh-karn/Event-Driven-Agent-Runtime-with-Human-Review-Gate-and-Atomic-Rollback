@@ -160,11 +160,50 @@ python -m tether.cli api --port 8000
 
 # In a separate terminal, start the worker
 python -m tether.cli worker
+
+# In a separate terminal, launch the Next.js Review UI
+cd review-ui && npm install && npm run dev
 ```
 
 ---
 
-## 6. Chaos Testing Guarantees
+## 6. Warehouse Replay CLI
+
+Reconstruct the full timeline of any execution run exclusively from BigQuery warehouse event logs:
+
+```bash
+# Replay full audit timeline of an agent run
+tether replay 3c914bf1-08fa-4e78-9580-ff29ad123b08
+
+# Compare and diff two runs of the same agent
+tether replay 3c914bf1-08fa-4e78-9580-ff29ad123b08 --diff e4a19b22-81cd-4bc0-9d33-728b9d10e8f1
+```
+
+---
+
+## 7. Automated Test Suite (52 Passing Tests)
+
+Run the full unit, integration, and chaos test suite:
+
+```bash
+uv run pytest tests/ -v
+```
+
+```text
+tests/chaos/test_chaos_recovery.py::test_chaos_worker_kill_mid_run_and_resumption PASSED
+tests/chaos/test_chaos_recovery.py::test_chaos_commit_crash_triggers_reverse_compensation PASSED
+tests/chaos/test_chaos_recovery.py::test_chaos_poison_message_moves_to_dead_letter_queue PASSED
+tests/chaos/test_chaos_recovery.py::test_chaos_stale_approval_timeout_expiration PASSED
+tests/integration/test_webhook_and_tamper.py::test_webhook_deduplication_exact_event_redelivery PASSED
+tests/integration/test_webhook_and_tamper.py::test_tampered_staged_effects_commit_refused PASSED
+tests/integration/test_webhook_and_tamper.py::test_human_reviewer_rejection_zero_effects_committed PASSED
+... (45 unit tests across runtime, state machine, gate, and export)
+======================== 52 passed, 1 warning in 6.95s ========================
+```
+
+---
+
+## 8. Chaos Testing Guarantees
 
 | Chaos Scenario | Expected Behavior |
 | :--- | :--- |
@@ -178,6 +217,6 @@ python -m tether.cli worker
 
 ---
 
-## 7. License
+## 9. License
 
 MIT License. See [LICENSE](LICENSE) for details.
