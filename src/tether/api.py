@@ -24,6 +24,7 @@ from tether.db import (
     get_staged_effects,
     init_db_pool,
 )
+from tether.gate import ApproveRequest, RejectRequest
 from tether.models import (
     Approval,
     EnqueueRequest,
@@ -192,3 +193,98 @@ async def receive_webhook(
         dedup_key=dedup_key,
     )
     return response
+
+
+@app.post(
+    "/runs/{run_id}/approve",
+    response_model=Approval,
+    summary="Human review gate: approve staged effects with cryptographic hash verification",
+)
+async def approve_run_endpoint(run_id: UUID, req: ApproveRequest):
+    """Verify effects_hash and advance run to APPROVED state."""
+    from tether.gate import EffectsHashMismatchError, ReviewGate
+
+    gate = ReviewGate()
+    try:
+        approval = await gate.approve_run(
+            run_id=run_id,
+            decided_by=req.decided_by,
+            effects_hash=req.effects_hash,
+            reason=req.reason,
+        )
+        return approval
+    except EffectsHashMismatchError as e:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(e),
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
+@app.post(
+    "/runs/{run_id}/reject",
+    response_model=Approval,
+    summary="Human review gate: reject staged effects, halting run with zero mutations",
+)
+async def reject_run_endpoint(run_id: UUID, req: RejectRequest):
+    """Reject run and terminate without executing any staged side effects."""
+    from tether.gate import ReviewGate
+
+    gate = ReviewGate()
+    try:
+        approval = await gate.reject_run(
+            run_id=run_id,
+            decided_by=req.decided_by,
+            reason=req.reason,
+        )
+        return approval
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
+@app.get(
+    "/runs",
+    response_model=list[Run],
+    summary="List runs with optional state and limit filters",
+)
+async def list_runs(
+    limit: int = Query(50, ge=1, le=200),
+    state: Optional[RunState] = Query(None),
+):
+    """Retrieve recent agent runs for the review portal dashboard."""
+    async with get_connection() as conn:
+        async with conn.cursor() as cur:
+            if state:
+                await cur.execute(
+                    "SELECT * FROM runs WHERE state = %s ORDER BY created_at DESC LIMIT %s;",
+                    (state.value, limit),
+                )
+            else:
+                await cur.execute(
+                    "SELECT * FROM runs ORDER BY created_at DESC LIMIT %s;",
+                    (limit,),
+                )
+            rows = await cur.fetchall()
+            return [
+                Run(
+                    id=r["id"],
+                    agent_id=r["agent_id"],
+                    trigger=r["trigger"],
+                    payload=r["payload"],
+                    dedup_key=r["dedup_key"],
+                    state=RunState(r["state"]),
+                    attempt=r["attempt"],
+                    created_at=r["created_at"],
+                    updated_at=r["updated_at"],
+                    error=r["error"],
+                )
+                for r in rows
+            ]
+
