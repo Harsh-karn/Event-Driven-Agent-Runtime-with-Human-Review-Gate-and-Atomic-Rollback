@@ -21,26 +21,26 @@ resource "google_billing_budget" "budget_alert" {
 
   threshold_rules {
     threshold_percent = 0.50 # 50% spend alert
-    basis             = "CURRENT_SPEND"
+    spend_basis       = "CURRENT_SPEND"
   }
 
   threshold_rules {
     threshold_percent = 0.75 # 75% spend alert
-    basis             = "CURRENT_SPEND"
+    spend_basis       = "CURRENT_SPEND"
   }
 
   threshold_rules {
     threshold_percent = 0.90 # 90% spend alert
-    basis             = "CURRENT_SPEND"
+    spend_basis       = "CURRENT_SPEND"
   }
 
   threshold_rules {
     threshold_percent = 1.00 # 100% spend alert (exceeded)
-    basis             = "CURRENT_SPEND"
+    spend_basis       = "CURRENT_SPEND"
   }
 
   threshold_rules {
     threshold_percent = 1.00 # Forecasted breach
-    basis             = "FORECASTED_SPEND"
+    spend_basis       = "FORECASTED_SPEND"
   }
 }

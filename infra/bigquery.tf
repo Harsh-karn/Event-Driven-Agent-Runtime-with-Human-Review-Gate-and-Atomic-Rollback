@@ -16,8 +16,8 @@ resource "google_bigquery_dataset" "warehouse" {
 }
 
 resource "google_bigquery_table" "events" {
-  dataset_id = google_bigquery_dataset.warehouse.dataset_id
-  table_id   = "events"
+  dataset_id  = google_bigquery_dataset.warehouse.dataset_id
+  table_id    = "events"
   description = "Partitioned event log emitted by Tether runtime; supports replay CLI and cost analytics."
 
   time_partitioning {
@@ -106,8 +106,8 @@ resource "google_bigquery_table" "events" {
 # Cost Attribution & Replay Views
 # ------------------------------------------------------------------------------
 resource "google_bigquery_table" "view_run_costs" {
-  dataset_id = google_bigquery_dataset.warehouse.dataset_id
-  table_id   = "v_run_costs"
+  dataset_id  = google_bigquery_dataset.warehouse.dataset_id
+  table_id    = "v_run_costs"
   description = "View providing immediate per-run and per-agent cost and token attribution."
 
   view {

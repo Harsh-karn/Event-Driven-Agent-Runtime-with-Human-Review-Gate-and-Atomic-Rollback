@@ -26,7 +26,7 @@ resource "google_cloud_scheduler_job" "scheduled_digest" {
     body = base64encode(jsonencode({
       agent_id = "demo_digest"
       trigger  = "schedule"
-      payload  = {
+      payload = {
         source  = "gcp_cloud_scheduler"
         cadence = "daily"
       }
