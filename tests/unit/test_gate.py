@@ -43,6 +43,7 @@ async def test_approve_run_valid_hash_succeeds():
         patch("tether.gate.record_approval", new=AsyncMock(side_effect=lambda a: a)),
         patch("tether.gate.update_run_state", new=AsyncMock()) as mock_update_state,
         patch("tether.gate.emit_event", new=AsyncMock()),
+        patch("tether.gate.send_queue_message", new=AsyncMock()) as mock_send_q,
     ):
         approval = await gate.approve_run(
             run_id=run_id,
@@ -55,6 +56,7 @@ async def test_approve_run_valid_hash_succeeds():
         assert approval.effects_hash == valid_hash
         assert approval.decided_by == "admin@tether.dev"
         mock_update_state.assert_awaited_once_with(run_id, RunState.APPROVED)
+        mock_send_q.assert_awaited_once_with("agent_runs", {"run_id": str(run_id), "action": "commit"})
 
 
 @pytest.mark.asyncio

@@ -122,3 +122,34 @@ def test_webhook_ingest_endpoint():
             payload=payload,
             dedup_key="triage_agent:evt_12345",
         )
+
+
+def test_approve_endpoint_requires_auth_when_configured(monkeypatch):
+    """Verify POST /runs/{id}/approve rejects unauthenticated requests when REVIEW_API_KEY is configured."""
+    monkeypatch.setenv("REVIEW_API_KEY", "super-secret-review-key-9988")
+    run_id = uuid4()
+
+    # 1. Without auth header -> 401 Unauthorized
+    resp_unauth = client.post(
+        f"/runs/{run_id}/approve",
+        json={"decided_by": "admin@example.com", "effects_hash": "dummy_hash"},
+    )
+    assert resp_unauth.status_code == 401
+    assert "Unauthorized" in resp_unauth.json()["detail"]
+
+    # 2. With valid auth header -> proceeds to gate logic
+    with patch("tether.gate.ReviewGate.approve_run", new=AsyncMock()) as mock_approve:
+        from tether.models import Approval, ApprovalDecision
+        mock_approve.return_value = Approval(
+            run_id=run_id,
+            decided_by="admin@example.com",
+            decision=ApprovalDecision.APPROVED,
+            effects_hash="dummy_hash",
+        )
+        resp_auth = client.post(
+            f"/runs/{run_id}/approve",
+            json={"decided_by": "admin@example.com", "effects_hash": "dummy_hash"},
+            headers={"X-Reviewer-Token": "super-secret-review-key-9988"},
+        )
+        assert resp_auth.status_code == 200
+        mock_approve.assert_awaited_once()

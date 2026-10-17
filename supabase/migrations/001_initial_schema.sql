@@ -226,9 +226,17 @@ BEGIN
     -- Generate new Run ID
     v_run_id := gen_random_uuid();
 
-    -- Insert new run
-    INSERT INTO runs (id, agent_id, trigger, payload, dedup_key, state, attempt, created_at, updated_at)
-    VALUES (v_run_id, p_agent_id, p_trigger, p_payload, p_dedup_key, 'queued', 0, NOW(), NOW());
+    -- Insert new run safely guarded against concurrent deduplication races
+    BEGIN
+        INSERT INTO runs (id, agent_id, trigger, payload, dedup_key, state, attempt, created_at, updated_at)
+        VALUES (v_run_id, p_agent_id, p_trigger, p_payload, p_dedup_key, 'queued', 0, NOW(), NOW());
+    EXCEPTION WHEN unique_violation THEN
+        SELECT id, runs.state INTO v_run_id, v_existing_state
+        FROM runs
+        WHERE dedup_key = p_dedup_key;
+        RETURN QUERY SELECT v_run_id, TRUE, v_existing_state;
+        RETURN;
+    END;
 
     -- Log run_started event to outbox
     INSERT INTO events (run_id, type, payload)

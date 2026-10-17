@@ -34,8 +34,11 @@ async def test_worker_successful_job_execution():
     mock_engine = AsyncMock()
     worker = TetherWorker(engine=mock_engine, max_attempts=5)
 
+    existing_run = Run(id=run_id, agent_id="demo_digest", state=RunState.QUEUED)
+
     with (
         patch("tether.worker.lease_next_job", new=AsyncMock(return_value=job)),
+        patch("tether.worker.get_run", new=AsyncMock(return_value=existing_run)),
         patch("tether.worker.archive_job", new=AsyncMock()) as mock_archive,
         patch("tether.worker.extend_lease", new=AsyncMock()) as mock_extend,
     ):
@@ -85,3 +88,55 @@ async def test_worker_max_attempts_exceeded_moves_to_dlq():
         )
         mock_emit_event.assert_awaited_once()
         mock_archive.assert_awaited_once_with(msg_id, queue_name="agent_runs", is_pgmq=False)
+
+
+@pytest.mark.asyncio
+async def test_worker_approved_run_invokes_commit_engine():
+    """Verify worker picking up an APPROVED run invokes execute_approved_effects instead of LLM reasoning."""
+    run_id = uuid4()
+    msg_id = 77
+    approved_run = Run(id=run_id, agent_id="demo_digest", state=RunState.APPROVED)
+
+    job = {
+        "msg_id": msg_id,
+        "read_ct": 1,
+        "payload": {"run_id": str(run_id), "action": "commit"},
+        "is_pgmq": True,
+    }
+
+    mock_engine = AsyncMock()
+    mock_engine.agent_lookup.return_value = None
+    worker = TetherWorker(engine=mock_engine, max_attempts=5)
+
+    with (
+        patch("tether.worker.lease_next_job", new=AsyncMock(return_value=job)),
+        patch("tether.worker.get_run", new=AsyncMock(return_value=approved_run)),
+        patch("tether.worker.execute_approved_effects", new=AsyncMock()) as mock_commit,
+        patch("tether.worker.archive_job", new=AsyncMock()) as mock_archive,
+        patch("tether.worker.extend_lease", new=AsyncMock()),
+    ):
+        processed = await worker.process_one_job()
+
+        assert processed is True
+        mock_engine.execute_run.assert_not_called()
+        mock_commit.assert_awaited_once()
+        mock_archive.assert_awaited_once_with(msg_id, queue_name="agent_runs", is_pgmq=True)
+
+
+@pytest.mark.asyncio
+async def test_worker_recovers_stale_in_flight_runs():
+    """Verify worker background recovery scans for orphaned COMMITTING runs and resumes commit."""
+    stale_run = Run(id=uuid4(), agent_id="demo_digest", state=RunState.COMMITTING)
+
+    mock_engine = AsyncMock()
+    mock_engine.agent_lookup.return_value = None
+    worker = TetherWorker(engine=mock_engine)
+
+    with (
+        patch("tether.worker.get_stale_in_flight_runs", new=AsyncMock(return_value=[stale_run])),
+        patch("tether.worker.execute_approved_effects", new=AsyncMock()) as mock_commit,
+    ):
+        recovered_count = await worker.recover_stale_in_flight_runs(max_stale_seconds=60)
+
+        assert recovered_count == 1
+        mock_commit.assert_awaited_once()

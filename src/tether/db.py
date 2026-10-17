@@ -500,6 +500,175 @@ async def emit_event(event: Event) -> None:
             await conn.commit()
 
 
+async def record_approval_and_transition(
+    approval: Approval,
+    target_state: RunState = RunState.APPROVED,
+) -> tuple[Approval, Run]:
+    """Atomically record approval and update run state in a single transaction."""
+    async with get_connection() as conn:
+        async with conn.cursor() as cur:
+            # 1. Lock the run row for update
+            await cur.execute("SELECT * FROM runs WHERE id = %s FOR UPDATE;", (approval.run_id,))
+            run_row = await cur.fetchone()
+            if not run_row:
+                raise ValueError(f"Run {approval.run_id} not found")
+
+            current_state = RunState(run_row["state"])
+            validate_transition(current_state, target_state, str(approval.run_id))
+
+            # 2. Insert approval
+            await cur.execute(
+                """
+                INSERT INTO approvals (id, run_id, decided_by, decision, reason, decided_at, effects_hash)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (run_id) DO UPDATE
+                SET decided_by = EXCLUDED.decided_by,
+                    decision = EXCLUDED.decision,
+                    reason = EXCLUDED.reason,
+                    decided_at = EXCLUDED.decided_at,
+                    effects_hash = EXCLUDED.effects_hash
+                RETURNING *;
+                """,
+                (
+                    approval.id,
+                    approval.run_id,
+                    approval.decided_by,
+                    approval.decision.value,
+                    approval.reason,
+                    approval.decided_at,
+                    approval.effects_hash,
+                ),
+            )
+            app_row = await cur.fetchone()
+            assert app_row is not None
+
+            # 3. Update run state
+            await cur.execute(
+                """
+                UPDATE runs
+                SET state = %s,
+                    updated_at = NOW()
+                WHERE id = %s
+                RETURNING *;
+                """,
+                (target_state.value, approval.run_id),
+            )
+            updated_run_row = await cur.fetchone()
+            assert updated_run_row is not None
+
+            # 4. Outbox state transition event
+            await cur.execute(
+                """
+                INSERT INTO events (run_id, type, payload)
+                VALUES (%s, %s, %s);
+                """,
+                (
+                    approval.run_id,
+                    EventType.APPROVAL_DECISION.value,
+                    json.dumps(
+                        {
+                            "decided_by": approval.decided_by,
+                            "decision": approval.decision.value,
+                            "reason": approval.reason,
+                            "effects_hash": approval.effects_hash,
+                            "from_state": current_state.value,
+                            "to_state": target_state.value,
+                        }
+                    ),
+                ),
+            )
+            await conn.commit()
+
+            recorded_approval = Approval(
+                id=app_row["id"],
+                run_id=app_row["run_id"],
+                decided_by=app_row["decided_by"],
+                decision=ApprovalDecision(app_row["decision"]),
+                reason=app_row["reason"],
+                decided_at=app_row["decided_at"],
+                effects_hash=app_row["effects_hash"],
+            )
+
+            updated_run = Run(
+                id=updated_run_row["id"],
+                agent_id=updated_run_row["agent_id"],
+                trigger=updated_run_row["trigger"],
+                payload=updated_run_row["payload"],
+                dedup_key=updated_run_row["dedup_key"],
+                state=RunState(updated_run_row["state"]),
+                attempt=updated_run_row["attempt"],
+                created_at=updated_run_row["created_at"],
+                updated_at=updated_run_row["updated_at"],
+                error=updated_run_row["error"],
+            )
+
+            return recorded_approval, updated_run
+
+
+async def send_queue_message(
+    queue_name: str,
+    message: dict[str, Any],
+) -> None:
+    """Send an arbitrary payload to pgmq or fallback queue."""
+    async with get_connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pgmq');")
+            row = await cur.fetchone()
+            has_pgmq = row["exists"] if row else False
+
+            if has_pgmq:
+                try:
+                    await cur.execute(
+                        "SELECT pgmq.send(%s, %s);",
+                        (queue_name, json.dumps(message)),
+                    )
+                    await conn.commit()
+                    return
+                except Exception as e:
+                    logger.warning(f"pgmq.send failed ({e}); falling back to table queue")
+
+            await cur.execute(
+                """
+                INSERT INTO tether_queue_messages (queue_name, message, vt)
+                VALUES (%s, %s, NOW());
+                """,
+                (queue_name, json.dumps(message)),
+            )
+            await conn.commit()
+
+
+async def get_stale_in_flight_runs(max_stale_seconds: int = 120) -> list[Run]:
+    """Retrieve runs stuck in committing or rolling_back states beyond threshold."""
+    async with get_connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                SELECT * FROM runs
+                WHERE state IN ('committing', 'rolling_back')
+                  AND updated_at < NOW() - (%s * INTERVAL '1 second')
+                FOR UPDATE SKIP LOCKED;
+                """,
+                (max_stale_seconds,),
+            )
+            rows = await cur.fetchall()
+            await conn.commit()
+            return [
+                Run(
+                    id=r["id"],
+                    agent_id=r["agent_id"],
+                    trigger=r["trigger"],
+                    payload=r["payload"],
+                    dedup_key=r["dedup_key"],
+                    state=RunState(r["state"]),
+                    attempt=r["attempt"],
+                    created_at=r["created_at"],
+                    updated_at=r["updated_at"],
+                    error=r["error"],
+                )
+                for r in rows
+            ]
+
+
 # ------------------------------------------------------------------------------
 # Queue Leasing Operations (pgmq + Fallback)
 # ------------------------------------------------------------------------------

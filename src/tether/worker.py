@@ -13,9 +13,11 @@ from tether.db import (
     emit_event,
     extend_lease,
     get_run,
+    get_stale_in_flight_runs,
     lease_next_job,
     update_run_state,
 )
+from tether.effects import ToolRegistry, execute_approved_effects
 from tether.engine import ExecutionEngine
 from tether.models import Event, EventType, RunState
 from tether.runtime.litellm_runtime import LiteLLMRuntime
@@ -148,8 +150,16 @@ class TetherWorker:
         )
 
         try:
-            # Delegate to Execution Engine
-            await self.engine.execute_run(run_id)
+            # Check run state to determine execution path
+            run = await get_run(run_id)
+            if run and run.state in (RunState.APPROVED, RunState.COMMITTING, RunState.ROLLING_BACK):
+                logger.info(f"Run {run_id} is in state '{run.state.value}'. Invoking commit engine.")
+                agent = self.engine.agent_lookup(run.agent_id)
+                registry = agent.tools if agent and hasattr(agent, "tools") else ToolRegistry()
+                await execute_approved_effects(run_id, registry)
+            else:
+                # Delegate to Execution Engine for reasoning and step execution
+                await self.engine.execute_run(run_id)
 
             # Execution succeeded: archive the queue message
             await archive_job(msg_id, queue_name=self.queue_name, is_pgmq=is_pgmq)
@@ -169,17 +179,39 @@ class TetherWorker:
 
         return True
 
+    async def recover_stale_in_flight_runs(self, max_stale_seconds: int = 120) -> int:
+        """Scan for runs abandoned in COMMITTING or ROLLING_BACK and resume commit or rollback."""
+        try:
+            stale_runs = await get_stale_in_flight_runs(max_stale_seconds)
+            for r in stale_runs:
+                logger.warning(
+                    f"Recovering orphaned run {r.id} abandoned in state '{r.state.value}' (> {max_stale_seconds}s)"
+                )
+                agent = self.engine.agent_lookup(r.agent_id)
+                registry = agent.tools if agent and hasattr(agent, "tools") else ToolRegistry()
+                await execute_approved_effects(r.id, registry)
+            return len(stale_runs)
+        except Exception as e:
+            logger.error(f"Error recovering stale in-flight runs: {e}", exc_info=True)
+            return 0
+
     async def start(self) -> None:
-        """Run the main polling loop with adaptive backoff."""
+        """Run the main polling loop with adaptive backoff and recovery checks."""
         logger.info(
             f"Tether Worker started on queue '{self.queue_name}' "
             f"(visibility={self.visibility_timeout}s, max_attempts={self.max_attempts})"
         )
 
         backoff = self.poll_interval_min
+        loop_counter = 0
 
         while not self._shutdown_event.is_set():
+            loop_counter += 1
             try:
+                # Periodically sweep for runs orphaned in committing/rolling_back
+                if loop_counter % 10 == 0:
+                    await self.recover_stale_in_flight_runs()
+
                 found_job = await self.process_one_job()
                 if found_job:
                     # Reset backoff when work is actively found

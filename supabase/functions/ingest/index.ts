@@ -109,19 +109,24 @@ serve(async (req: Request) => {
       });
     }
 
-    // 1. Validate HMAC signature if secret configured
-    if (WEBHOOK_SECRET) {
-      const signatureHeader = req.headers.get("X-Webhook-Signature");
-      const isValid = await verifyHmacSignature(rawBody, signatureHeader, WEBHOOK_SECRET);
-      if (!isValid) {
-        return new Response(
-          JSON.stringify({ error: "Unauthorized: Invalid X-Webhook-Signature" }),
-          {
-            status: 401,
-            headers: { "Content-Type": "application/json" },
-          }
-        );
-      }
+    // 1. Validate HMAC signature
+    const signatureHeader = req.headers.get("X-Webhook-Signature");
+    if (!WEBHOOK_SECRET) {
+      console.error("CRITICAL: WEBHOOK_SECRET is not configured in environment. Rejecting webhook for security.");
+      return new Response(
+        JSON.stringify({ error: "Server configuration error: WEBHOOK_SECRET is required" }),
+        { status: 500, headers: { "Content-Type": "application/json" } }
+      );
+    }
+    const isValid = await verifyHmacSignature(rawBody, signatureHeader, WEBHOOK_SECRET);
+    if (!isValid) {
+      return new Response(
+        JSON.stringify({ error: "Unauthorized: Invalid X-Webhook-Signature" }),
+        {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        }
+      );
     }
 
     // 2. Resolve Agent and Deduplication Key

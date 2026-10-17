@@ -16,6 +16,7 @@ from tether.db import (
     get_run,
     get_staged_effects,
     record_approval,
+    send_queue_message,
     update_run_state,
 )
 from tether.effects import compute_effects_hash
@@ -204,6 +205,14 @@ class ReviewGate:
         )
 
         logger.info(f"Run {run_id} APPROVED by {decided_by} with verified effects_hash {effects_hash}")
+
+        # Enqueue commit execution into the queue for worker to execute
+        try:
+            await send_queue_message("agent_runs", {"run_id": str(run_id), "action": "commit"})
+            logger.info(f"Dispatched commit job to queue for run {run_id}")
+        except Exception as q_err:
+            logger.debug(f"Queue dispatch notice for run {run_id}: {q_err}")
+
         return recorded
 
     async def reject_run(
@@ -275,7 +284,8 @@ class ReviewGate:
                     """
                     SELECT id FROM runs
                     WHERE state = 'awaiting_approval'
-                      AND updated_at < NOW() - (%s * INTERVAL '1 second');
+                      AND updated_at < NOW() - (%s * INTERVAL '1 second')
+                    FOR UPDATE SKIP LOCKED;
                     """,
                     (expiry_seconds,),
                 )

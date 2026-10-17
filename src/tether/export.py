@@ -95,8 +95,15 @@ class BigQueryExporter:
                         }
                     )
 
-                # Stream rows into BigQuery
-                errors = self.client.insert_rows_json(self.full_table_id, bq_rows)
+                # Stream rows into BigQuery asynchronously without blocking event loop,
+                # passing row_ids for server-side deduplication against duplicate loads
+                row_ids = [str(r["id"]) for r in rows]
+                errors = await asyncio.to_thread(
+                    self.client.insert_rows_json,
+                    self.full_table_id,
+                    bq_rows,
+                    row_ids=row_ids,
+                )
                 if errors:
                     error_msg = f"BigQuery streaming insert errors: {errors}"
                     logger.error(error_msg)

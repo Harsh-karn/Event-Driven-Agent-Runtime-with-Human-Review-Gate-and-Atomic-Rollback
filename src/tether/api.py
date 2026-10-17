@@ -195,10 +195,32 @@ async def receive_webhook(
     return response
 
 
+def verify_reviewer_auth(
+    authorization: Optional[str] = Header(None),
+    x_reviewer_token: Optional[str] = Header(None),
+) -> None:
+    """Validate reviewer identity token if REVIEW_API_KEY is configured."""
+    expected_token = os.getenv("REVIEW_API_KEY")
+    if not expected_token:
+        # Development / test mode: allow when unconfigured
+        return
+
+    provided = x_reviewer_token
+    if not provided and authorization and authorization.startswith("Bearer "):
+        provided = authorization[7:].strip()
+
+    if not provided or not hmac.compare_digest(provided, expected_token):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unauthorized: Missing or invalid reviewer authentication",
+        )
+
+
 @app.post(
     "/runs/{run_id}/approve",
     response_model=Approval,
     summary="Human review gate: approve staged effects with cryptographic hash verification",
+    dependencies=[Depends(verify_reviewer_auth)],
 )
 async def approve_run_endpoint(run_id: UUID, req: ApproveRequest):
     """Verify effects_hash and advance run to APPROVED state."""
@@ -229,6 +251,7 @@ async def approve_run_endpoint(run_id: UUID, req: ApproveRequest):
     "/runs/{run_id}/reject",
     response_model=Approval,
     summary="Human review gate: reject staged effects, halting run with zero mutations",
+    dependencies=[Depends(verify_reviewer_auth)],
 )
 async def reject_run_endpoint(run_id: UUID, req: RejectRequest):
     """Reject run and terminate without executing any staged side effects."""
