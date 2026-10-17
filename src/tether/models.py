@@ -1,11 +1,16 @@
 """Core Pydantic domain models and enumerations for Tether."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field
+
+
+def utc_now() -> datetime:
+    """Return timezone-aware current UTC time."""
+    return datetime.now(timezone.utc)
 
 
 class RunState(str, Enum):
@@ -82,8 +87,8 @@ class Run(BaseModel):
     dedup_key: Optional[str] = None
     state: RunState = RunState.QUEUED
     attempt: int = 0
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
     error: Optional[str] = None
 
 
@@ -98,7 +103,7 @@ class Step(BaseModel):
     output: Optional[dict[str, Any]] = None
     status: StepStatus = StepStatus.PENDING
     idempotency_key: str
-    started_at: datetime = Field(default_factory=datetime.utcnow)
+    started_at: datetime = Field(default_factory=utc_now)
     ended_at: Optional[datetime] = None
     error: Optional[str] = None
 
@@ -117,7 +122,7 @@ class StagedEffect(BaseModel):
     idempotency_key: str
     result: Optional[dict[str, Any]] = None
     error: Optional[str] = None
-    staged_at: datetime = Field(default_factory=datetime.utcnow)
+    staged_at: datetime = Field(default_factory=utc_now)
     committed_at: Optional[datetime] = None
     compensated_at: Optional[datetime] = None
 
@@ -130,7 +135,7 @@ class Approval(BaseModel):
     decided_by: str
     decision: ApprovalDecision
     reason: Optional[str] = None
-    decided_at: datetime = Field(default_factory=datetime.utcnow)
+    decided_at: datetime = Field(default_factory=utc_now)
     effects_hash: str
 
 
@@ -140,7 +145,7 @@ class Event(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     run_id: UUID
     step_id: Optional[UUID] = None
-    ts: datetime = Field(default_factory=datetime.utcnow)
+    ts: datetime = Field(default_factory=utc_now)
     type: EventType
     payload: dict[str, Any] = Field(default_factory=dict)
     tokens_in: int = 0
