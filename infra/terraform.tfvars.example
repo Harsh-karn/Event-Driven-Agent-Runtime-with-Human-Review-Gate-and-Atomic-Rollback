@@ -1,0 +1,14 @@
+# Example Terraform Variables Configuration for Tether
+# Copy this file to terraform.tfvars and fill in your GCP project values
+
+project_id         = "my-tether-gcp-project"
+region             = "us-central1"
+environment        = "production"
+container_image    = "us-central1-docker.pkg.dev/my-tether-gcp-project/tether/runtime:v0.1.0"
+billing_account_id = "012345-6789AB-CDEF01" # Optional
+budget_amount_usd  = 50
+cron_schedule      = "0 9 * * *" # Daily 9am UTC
+min_instances_api  = 0           # Scale to zero
+max_instances_api  = 10
+min_instances_worker = 0         # Scale to zero
+max_instances_worker = 5
